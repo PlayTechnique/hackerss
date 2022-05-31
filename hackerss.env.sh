@@ -1,0 +1,4 @@
+#!/bin/env bash
+
+RSS_FEED_PORT=8493
+STORIES_LIMIT=25
