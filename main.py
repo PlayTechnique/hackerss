@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-
+import atexit
+import fnmatch
+import glob
 import hashlib
 import json
 import os
 import sys
+import textwrap
 import time
 
 import urllib.request
@@ -14,6 +17,12 @@ import socketserver
 
 def fetch_from_url(api_url: str) -> any:
     logger = logging.getLogger('hackerss')
+
+    num_cache_files = len(fnmatch.filter(os.listdir('.'), '*.cache'))
+
+    if (num_cache_files >= 100):
+        cleanup_cache(logger)
+
     # The URL contains slashes, which messes around with `open()`'s attempt to create a file handle.
     # We could work out a way to parse the string and remove the unpleasant characters, or we can
     # just convert the string to some other format. I picked a hash of the string.
@@ -40,12 +49,21 @@ def fetch_from_url(api_url: str) -> any:
     return json_content
 
 
+def cleanup_cache(logger):
+    logger.debug("Cleaning cache files")
+    cache_files = glob.glob('*.cache')
+
+    for file in cache_files:
+        os.remove(file)
+
+
 class RssFeedElements:
     ''' Taking the elements from https://www.rssboard.org/rss-profile#elements
     Mandatory header
     This header Must contain one, and only one, channel element
         The channel element is REQUIRED and MUST contain three child elements: description, link and title.
     The channel also MAY contain zero or more item elements. The order of elements within the channel MUST NOT be treated as significant.
+    This class is mostly a namespace for a collection of methods; there's no constructor.
 '''
 
     def _channel_header_body(self) -> str:
@@ -72,9 +90,10 @@ class RssFeedElements:
 
         # These two attributes aren't always in the data from upstream.
         try:
+            # The leading newline makes the output xml much tidier to inspect
             buffer.append(f"\n<item>")
-            buffer.append(f"<title>{story['title']}</title>")
-            buffer.append(f"<link>{story['url']}</link>")
+            buffer.append(f"<title>{story.get('title', 'no title provided')}</title>")
+            buffer.append(f"<link>{story.get('url', 'no url provided')}</link>")
             # buffer.append(f"<source>https://hacker-news.firebaseio.com/</source>")
             buffer.append(f"</item>")
             return "\n".join(buffer)
@@ -131,6 +150,20 @@ class RssHandler(socketserver.BaseRequestHandler):
 
 
 if __name__ == '__main__':
+
+    if "--help" in sys.argv:
+        help = textwrap.dedent('''
+        Usage: execute this script and the hackernews API will be consumed and an RSS feed generated from it on a TCP socket.
+        The TCP socket will be bound to 0.0.0.0
+        
+        Env Vars:
+        RSS_FEED_PORT - defaults to 11223
+        STORIES_LIMIT - defaults to 1 story; you probably want this set much higher
+        ''')
+
+        print(help)
+        sys.exit(0)
+
     fetch = True
 
     logging.basicConfig(stream=sys.stdout)
@@ -139,8 +172,11 @@ if __name__ == '__main__':
 
     rss_feed_generator = RssFeedElements()
 
-    serving_address = '127.0.0.1'
-    serving_port = 8943
+    serving_address = '0.0.0.0'
+    serving_port = os.environ.get('RSS_FEED_PORT', '11223')
+    serving_port = int(serving_port)
+
+    logger.debug(f"Starting on {serving_address}:{serving_port}")
 
     hacker_news_newstories_url = "https://hacker-news.firebaseio.com/v0/newstories.json"
 
@@ -152,9 +188,10 @@ if __name__ == '__main__':
         stories = list()
 
         # Arbitrary limit for number of stories we're interested in.
-        limit = 1
+        stories_limit = os.environ.get('STORIES_LIMIT', '1')
+        stories_limit = int(stories_limit)
 
-        post_ids = post_ids[0:limit]
+        post_ids = post_ids[0:stories_limit]
 
         for post_id in post_ids:
             # Each item fetched is going to be of "story".
@@ -165,12 +202,13 @@ if __name__ == '__main__':
             logger.debug(f"fetching {post_url}")
             post = fetch_from_url(post_url)
 
-            if post["type"] == "story":
+            if post.get('type', False) == "story":
                 stories.append(post)
             else:
                 logger.debug(f"ERR: {post_id} does not have attribute type story in \n{post}")
 
     rss_content = rss_feed_generator.generate_rss_feed(stories)
+    atexit.register(cleanup_cache, logger)
 
     # Oof. To hand data in to the handle() method, the "best" solution I could come up with was writing a custom TCP
     # server, and the second best was to hand the data on a custom data attribute.
