@@ -7,6 +7,8 @@ cd ${THIS_SCRIPT_DIR}
 
 source hackerss.env.sh
 
+CONTAINER_VERSION=${CONTAINER_VERSION:-"latest"}
+
 echo "RSS_FEED_PORT is <${RSS_FEED_PORT}>"
 docker run \
 --rm \
