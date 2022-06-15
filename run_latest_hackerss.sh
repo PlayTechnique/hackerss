@@ -14,4 +14,4 @@ docker run \
 --name hackerss \
 -p ${RSS_FEED_PORT}:${RSS_FEED_PORT} \
 -t \
-jamandbees/hackerss:latest
+jamandbees/hackerss:${CONTAINER_VERSION}
