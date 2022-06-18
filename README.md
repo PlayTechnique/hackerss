@@ -6,6 +6,12 @@ It can be run as a standalone script (it only uses standard library calls, so no
 the container directly. See the run_latest_hackerss.sh script for details; note this script is mostly there to help me 
 as I was developing this thing, so be kind to it.
 
+## Developing Hackerss
+I tried to keep everything in one file, as this is a small application.
+The script runs standalone perfectly well, so just run `main.py` if you want to see how it runs; if you want to run it 
+kubernetes or something else, there's a container on docker hub in `docker.io/jamandbees/hackerss:<tag>`.
+
+
 ## Installing and Running Hackerss as a Systemd Service
 
 1. create the hackerss container on the system you would like to run it on. You can either

@@ -15,37 +15,45 @@ import logging
 import socketserver
 
 
-def fetch_from_url(api_url: str) -> any:
+def fetch_from_url(api_url: str, cache_results: bool = True) -> any:
+    '''Fetches the contents of a url, and caches the result temporarily to reduce load.
+
+    api_url: string, the url to fetch data from.
+    cache_results: boolean, whether to cache the results of this fetch. This is needed because we create the cache based
+    upon the URL that we are fetching from. If the URL is unique then caching that result is useful; if the URL is not
+    unique (such as with the "https://hacker-news.firebaseio.com/v0/newstories.json" api endpoint) then we'd only ever
+    update the content when the cache gets busted.
+    '''
     logger = logging.getLogger('hackerss')
 
     num_cache_files = len(fnmatch.filter(os.listdir('.'), '*.cache'))
 
-    if (num_cache_files >= 100):
+    # Keeping the cache size manageable and the calculation simple
+    if (num_cache_files >= 1000):
         cleanup_cache(logger)
 
-    # The URL contains slashes, which messes around with `open()`'s attempt to create a file handle.
-    # We could work out a way to parse the string and remove the unpleasant characters, or we can
-    # just convert the string to some other format. I picked a hash of the string.
+    # The cache is maintained as files on disk, with uniqueness provided by appending an md5
+    # of the URL to the file name
     # The cache is just so I don't end up spamming upstream too much. Poor upstream...
     cache_file = hashlib.md5(f"{api_url}".encode()).hexdigest() + ".cache"
-    ten_minutes = 60 * 10
     body = None
 
-    if os.path.isfile(cache_file) and (time.time() - os.path.getmtime(cache_file) < ten_minutes):
+    if os.path.isfile(cache_file):
         logger.debug(f"Found cached file <{cache_file}> for <{api_url}>")
         with open(cache_file) as cache:
             body = cache.read()
     else:
-        logger.debug(f"No cache file <{cache_file}> for <{api_url}>. Creating...")
         contents = urllib.request.urlopen(api_url)
-
         body = contents.read().decode('utf-8')
 
-        with open(cache_file, "w") as cache:
-            cache.write(body)
+        if cache_results:
+            logger.debug(f"Creating cache file <{cache_file}> for <{api_url}>.")
+            with open(cache_file, "w") as cache:
+                cache.write(body)
+        else:
+            logger.debug(f"Skipping cache file <{cache_file}> for <{api_url}>.")
 
     json_content = json.loads(body)
-
     return json_content
 
 
@@ -68,7 +76,7 @@ class RssFeedElements:
 
     def _channel_header_body(self) -> str:
         # The description element holds character data that provides a human-readable characterization or summary of the feed (REQUIRED).
-        description = "Gwyn's Rss Channel for Hacker-News"
+        description = "Hackerss-News"
         # The link element identifies the URL of the web site associated with the feed (REQUIRED).
         link = "https://news.ycombinator.com"
         # The title element holds character data that provides the name of the feed (REQUIRED).
@@ -94,7 +102,6 @@ class RssFeedElements:
             buffer.append(f"\n<item>")
             buffer.append(f"<title>{story.get('title', 'no title provided')}</title>")
             buffer.append(f"<link>{story.get('url', 'no url provided')}</link>")
-            # buffer.append(f"<source>https://hacker-news.firebaseio.com/</source>")
             buffer.append(f"</item>")
             return "\n".join(buffer)
         except Exception as e:
@@ -124,18 +131,25 @@ class RssFeedElements:
 
 
 class RssHandler(socketserver.BaseRequestHandler):
+
+    def rss_feed_data(self):
+        rss_feed_generator = RssFeedElements()
+
+        stories = fetch_stories_from_api()
+        rss_content = rss_feed_generator.generate_rss_feed(stories)
+
+        return rss_content
+
     def handle(self):
         logger.debug("DEBUG: Serving request...")
-        # This creates a dependency on the server having an rss_feed method. This is fine for this sort of toy,
-        # though I hope nobody who employs me ever looks at this and notices that there's no tests here and I'm just
-        # passing attributes around as though they're a real protocol.
-        rss_feed = self.server.rss_feed
+
+        rss_feed = self.rss_feed_data()
 
         http_header = "HTTP/1.1 200"
         http_blank = "\n"
 
         # magical 3. I _think_ it's tracking the blank lines, but I got it from an error message in curl
-        http_content_length_header = f"content-length: {len(rss_content.encode()) + 3}"
+        http_content_length_header = f"content-length: {len(rss_feed.encode()) + 3}"
 
         data = []
         data.append(http_header)
@@ -149,6 +163,37 @@ class RssHandler(socketserver.BaseRequestHandler):
         self.request.send(encoded_data)
 
 
+def fetch_stories_from_api():
+    # Fetching newstories returns a list of page IDs.
+    # https://github.com/HackerNews/API#new-top-and-best-stories
+    hacker_news_posts_ids_endpoint = "https://hacker-news.firebaseio.com/v0/newstories.json"
+
+    logger.debug(f"fetching from {hacker_news_posts_ids_endpoint}")
+    post_ids = fetch_from_url(hacker_news_posts_ids_endpoint, cache_results=False)
+
+    stories = list()
+
+    stories_limit = os.environ.get('STORIES_LIMIT', '1')
+    stories_limit = int(stories_limit)
+    post_ids = post_ids[0:stories_limit]
+
+    for post_id in post_ids:
+        # Each item fetched is going to be of "story".
+        # We can verify this with the 'type' attribute.
+        # https://github.com/HackerNews/API#items
+        post_url = f"https://hacker-news.firebaseio.com/v0/item/{post_id}.json"
+
+        logger.debug(f"fetching {post_url}")
+        post = fetch_from_url(post_url)
+
+        if post.get('type', False) == "story":
+            stories.append(post)
+        else:
+            logger.debug(f"ERR: {post_id} does not have attribute type story in \n{post}")
+
+    return stories
+
+
 if __name__ == '__main__':
 
     if "--help" in sys.argv:
@@ -158,19 +203,18 @@ if __name__ == '__main__':
         
         Env Vars:
         RSS_FEED_PORT - defaults to 11223
-        STORIES_LIMIT - defaults to 1 story; you probably want this set much higher
+        STORIES_LIMIT - defaults to 1 story; you probably want this set much higher.
         ''')
 
         print(help)
         sys.exit(0)
 
-    fetch = True
-
     logging.basicConfig(stream=sys.stdout)
     logger = logging.getLogger('hackerss')
     logger.setLevel(logging.DEBUG)
 
-    rss_feed_generator = RssFeedElements()
+    # Keep things tidy
+    atexit.register(cleanup_cache, logger)
 
     serving_address = '0.0.0.0'
     serving_port = os.environ.get('RSS_FEED_PORT', '11223')
@@ -178,40 +222,7 @@ if __name__ == '__main__':
 
     logger.debug(f"Starting on {serving_address}:{serving_port}")
 
-    hacker_news_newstories_url = "https://hacker-news.firebaseio.com/v0/newstories.json"
-
-    if fetch:
-        # Fetching newstories returns a list of page IDs.
-        # https://github.com/HackerNews/API#new-top-and-best-stories
-        logger.debug(f"fetching from {hacker_news_newstories_url}")
-        post_ids = fetch_from_url(hacker_news_newstories_url)
-        stories = list()
-
-        # Arbitrary limit for number of stories we're interested in.
-        stories_limit = os.environ.get('STORIES_LIMIT', '1')
-        stories_limit = int(stories_limit)
-
-        post_ids = post_ids[0:stories_limit]
-
-        for post_id in post_ids:
-            # Each item fetched is going to be of "story".
-            # We can verify this with the 'type' attribute.
-            # https://github.com/HackerNews/API#items
-            post_url = f"https://hacker-news.firebaseio.com/v0/item/{post_id}.json"
-
-            logger.debug(f"fetching {post_url}")
-            post = fetch_from_url(post_url)
-
-            if post.get('type', False) == "story":
-                stories.append(post)
-            else:
-                logger.debug(f"ERR: {post_id} does not have attribute type story in \n{post}")
-
-    rss_content = rss_feed_generator.generate_rss_feed(stories)
-    atexit.register(cleanup_cache, logger)
-
     # Oof. To hand data in to the handle() method, the "best" solution I could come up with was writing a custom TCP
     # server, and the second best was to hand the data on a custom data attribute.
     with socketserver.TCPServer((serving_address, serving_port), RssHandler) as server:
-        server.rss_feed = rss_content
         server.serve_forever()
