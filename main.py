@@ -166,7 +166,7 @@ class RssHandler(socketserver.BaseRequestHandler):
 def fetch_stories_from_api():
     # Fetching newstories returns a list of page IDs.
     # https://github.com/HackerNews/API#new-top-and-best-stories
-    hacker_news_posts_ids_endpoint = "https://hacker-news.firebaseio.com/v0/newstories.json"
+    hacker_news_posts_ids_endpoint = "https://hacker-news.firebaseio.com/v0/topstories.json"
 
     logger.debug(f"fetching from {hacker_news_posts_ids_endpoint}")
     post_ids = fetch_from_url(hacker_news_posts_ids_endpoint, cache_results=False)
