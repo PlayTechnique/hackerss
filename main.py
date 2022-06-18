@@ -147,6 +147,7 @@ class RssHandler(socketserver.BaseRequestHandler):
 
         http_header = "HTTP/1.1 200"
         http_blank = "\n"
+        http_content_type_header = "Content-Type: application/rss+xml"
 
         # magical 3. I _think_ it's tracking the blank lines, but I got it from an error message in curl
         http_content_length_header = f"content-length: {len(rss_feed.encode()) + 3}"
@@ -154,6 +155,7 @@ class RssHandler(socketserver.BaseRequestHandler):
         data = []
         data.append(http_header)
         data.append(http_content_length_header)
+        data.append(http_content_type_header)
         data.append(http_blank)  # http standard says to have a blank line after you've sent your metadata i.e. headers
         data.append(rss_feed)
         data.append(http_blank)
