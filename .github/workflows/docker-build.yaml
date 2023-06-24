@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     env:
-      DOCKERIMAGE: playtechnique/playtechnique.io:${{ github.run_attempt }}
+      DOCKERIMAGE: playtechnique/hackerss:${{ github.run_attempt }}
     runs-on: ubuntu-latest
 
     steps:
